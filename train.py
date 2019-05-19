@@ -6,9 +6,10 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 import test  # Import test.py to get mAP after each epoch
-from models import *
 from utils.datasets import *
 from utils.utils import *
+from models import *
+
 
 # Hyperparameters: train.py --evolve --epochs 2 --img-size 320, Metrics: 0.204      0.302      0.175      0.234 (square smart)
 hyp = {'xy': 0.167,  # xy loss gain

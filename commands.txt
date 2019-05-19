@@ -1,0 +1,39 @@
+# run this after installing conda
+conda create pytorch
+conda activate pytorch
+conda install numpy opencv matplotlib tqdm pillow && conda install pytorch torchvision -c pytorch
+
+# run this before any other command!!
+conda activate pytorch
+
+
+# run this to convert VideoLabel dataset to yolo dataset
+python VideoLabel_convert.py
+--directory_path C:/path/to/obj1 --out_directory path/to/output_folder
+--cfg_template_path ./cfg/yolov3.cfg
+--check_corruption
+
+# run this to start training on new dataset (default 273 epochs) (batch=10 for rtx 2080ti 11gb) (outputs the network to weights/best.pt)
+python train.py
+--cfg converted_dataset/custom_yolov3.cfg --data-cfg converted_dataset/dataset.data
+--multi-scale --batch-size 10 --num-workers 0 
+
+# run this to resume training on dataset (after at least 1 epoch)
+python train.py
+--cfg converted_dataset/custom_yolov3.cfg --data-cfg converted_dataset/dataset.data
+--multi-scale --batch-size 10 --num-workers 0
+--resume
+
+# run this to detect on all images in folder
+python detect.py
+--cfg converted_dataset/custom_yolov3.cfg --data-cfg converted_dataset/dataset.data 
+--weights weights/best.pt
+--images path/to/image_folder 
+--conf-thres 0.2 --nms-thres 0.2
+
+# VideoLabel_convert.py also splits dataset into special 'test' directory. This acts as a completely 'blind' test for network, running this will show how accurate the network is on fresh data
+python detect.py 
+--cfg converted_dataset/custom_yolov3.cfg --data-cfg converted_dataset/dataset.data 
+--weights weights/best.pt 
+--images converted_dataset/test 
+--conf-thres 0.2 --nms-thres 0.2

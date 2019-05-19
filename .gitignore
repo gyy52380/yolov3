@@ -35,6 +35,9 @@ pycocotools/*
 results*.txt
 gcp_test*.sh
 
+output/
+converted/
+
 # MATLAB GitIgnore -----------------------------------------------------------------------------------------------------
 *.m~
 *.mat
