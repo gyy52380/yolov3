@@ -12,15 +12,15 @@ from models import *
 
 
 # Hyperparameters: train.py --evolve --epochs 2 --img-size 320, Metrics: 0.204      0.302      0.175      0.234 (square smart)
-hyp = {'xy': 0.167,  # xy loss gain
-       'wh': 0.09339,  # wh loss gain
-       'cls': 0.03868,  # cls loss gain
-       'conf': 4.546,  # conf loss gain
-       'iou_t': 0.2454,  # iou target-anchor training threshold
-       'lr0': 0.000198,  # initial learning rate
-       'lrf': -5.,  # final learning rate = lr0 * (10 ** lrf)
-       'momentum': 0.95,  # SGD momentum
-       'weight_decay': 0.0007838}  # optimizer weight decay
+hyp = {'xy': 0.2,  # xy loss gain
+       'wh': 0.1,  # wh loss gain
+       'cls': 0.04,  # cls loss gain
+       'conf': 4.5,  # conf loss gain
+       'iou_t': 0.5,  # iou target-anchor training threshold
+       'lr0': 0.001,  # initial learning rate
+       'lrf': -4.,  # final learning rate = lr0 * (10 ** lrf)
+       'momentum': 0.90,  # SGD momentum
+       'weight_decay': 0.0005}  # optimizer weight decay
 
 
 # Hyperparameters: Original, Metrics: 0.172      0.304      0.156      0.205 (square)
@@ -56,7 +56,6 @@ hyp = {'xy': 0.167,  # xy loss gain
 #        'momentum': 0.9025,  # SGD momentum
 #        'weight_decay': 0.0005417}  # optimizer weight decay
 
-
 def train(
         cfg,
         data_cfg,
@@ -76,8 +75,8 @@ def train(
     device = torch_utils.select_device()
 
     if multi_scale:
-        img_size = 608  # initiate with maximum multi_scale size
-        opt.num_workers = 0  # bug https://github.com/ultralytics/yolov3/issues/174
+        img_size = round((img_size / 32) * 1.5) * 32  # initiate with maximum multi_scale size
+        # opt.num_workers = 0  # bug https://github.com/ultralytics/yolov3/issues/174
     else:
         torch.backends.cudnn.benchmark = True  # unsuitable for multiscale
 
@@ -139,7 +138,12 @@ def train(
     # plt.savefig('LR.png', dpi=300)
 
     # Dataset
-    dataset = LoadImagesAndLabels(train_path, img_size, batch_size, augment=True, rect=False, image_weights=False)
+    dataset = LoadImagesAndLabels(train_path,
+                                  img_size,
+                                  batch_size,
+                                  augment=True,
+                                  rect=False,
+                                  multi_scale=multi_scale)
 
     # Initialize distributed training
     if torch.cuda.device_count() > 1:
@@ -162,6 +166,10 @@ def train(
         from apex import amp
         model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
 
+    # Remove old results
+    for f in glob.glob('*_batch*.jpg') + glob.glob('results.txt'):
+        os.remove(f)
+
     # Start training
     model.hyp = hyp  # attach hyperparameters to model
     model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device)  # attach class weights
@@ -170,17 +178,15 @@ def train(
     maps = np.zeros(nc)  # mAP per class
     results = (0, 0, 0, 0, 0)  # P, R, mAP, F1, test_loss
     n_burnin = min(round(nb / 5 + 1), 1000)  # burn-in batches
-    for f in glob.glob('train_batch*.jpg') + glob.glob('test_batch*.jpg'):
-        os.remove(f)
     t, t0 = time.time(), time.time()
     for epoch in range(start_epoch, epochs):
         model.train()
-        print(('\n%8s%12s' + '%10s' * 7) % ('Epoch', 'Batch', 'xy', 'wh', 'conf', 'cls', 'total', 'nTargets', 'time'))
+        print(('\n%8s%12s' + '%10s' * 7) % ('Epoch', 'Batch', 'xy', 'wh', 'conf', 'cls', 'total', 'targets', 'time'))
 
         # Update scheduler
         scheduler.step()
 
-        # Freeze backbone at epoch 0, unfreeze at epoch 1
+        # Freeze backbone at epoch 0, unfreeze at epoch 1 (optional)
         if freeze_backbone and epoch < 2:
             for name, p in model.named_parameters():
                 if int(name.split('.')[1]) < cutoff:  # if layer < 75
@@ -195,7 +201,6 @@ def train(
         for i, (imgs, targets, _, _) in enumerate(dataloader):
             imgs = imgs.to(device)
             targets = targets.to(device)
-            nt = len(targets)
 
             # Plot images with bounding boxes
             if epoch == 0 and i == 0:
@@ -228,13 +233,11 @@ def train(
                 optimizer.step()
                 optimizer.zero_grad()
 
-            # Update running mean of tracked metrics
-            mloss = (mloss * i + loss_items) / (i + 1)
-
             # Print batch results
+            mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
             s = ('%8s%12s' + '%10.3g' * 7) % (
                 '%g/%g' % (epoch, epochs - 1),
-                '%g/%g' % (i, nb - 1), *mloss, nt, time.time() - t)
+                '%g/%g' % (i, nb - 1), *mloss, len(targets), time.time() - t)
             t = time.time()
             print(s)
 

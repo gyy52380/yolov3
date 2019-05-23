@@ -130,14 +130,19 @@ class LoadWebcam:  # for inference
 
 
 class LoadImagesAndLabels(Dataset):  # for training/testing
-    def __init__(self, path, img_size=416, batch_size=16, augment=False, rect=True, image_weights=False):
+    def __init__(self, path, img_size=416, batch_size=16, augment=False, rect=True, image_weights=False,
+                 multi_scale=False):
         with open(path, 'r') as f:
             img_files = f.read().splitlines()
             self.img_files = list(filter(lambda x: len(x) > 0, img_files))
 
         n = len(self.img_files)
-        self.n = n
+        bi = np.floor(np.arange(n) / batch_size).astype(np.int)  # batch index
+        nb = bi[-1] + 1  # number of batches
         assert n > 0, 'No images found in %s' % path
+
+        self.n = n
+        self.batch = bi  # batch index of image
         self.img_size = img_size
         self.augment = augment
         self.image_weights = image_weights
@@ -148,11 +153,13 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                                 replace('.bmp', '.txt').
                                 replace('.png', '.txt') for x in self.img_files]
 
+        if multi_scale:
+            s = img_size / 32
+            self.multi_scale = ((np.linspace(0.5, 1.5, nb) * s).round().astype(np.int) * 32)
+
         # Rectangular Training  https://github.com/ultralytics/yolov3/issues/232
         if self.rect:
             from PIL import Image
-            bi = np.floor(np.arange(n) / batch_size).astype(np.int)  # batch index
-            nb = bi[-1] + 1  # number of batches
 
             # Read image shapes
             sp = 'data' + os.sep + path.replace('.txt', '.shapes').split(os.sep)[-1]  # shapefile path
@@ -182,24 +189,32 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                     shapes[i] = [1, 1 / mini]
 
             self.batch_shapes = np.ceil(np.array(shapes) * img_size / 32.).astype(np.int) * 32
-            self.batch = bi  # batch index of image
-
-        # Preload images
-        if n < 1001:  # preload all images into memory if possible
-            self.imgs = [cv2.imread(self.img_files[i]) for i in tqdm(range(n), desc='Reading images')]
 
         # Preload labels (required for weighted CE training)
+        self.imgs = [None] * n
         self.labels = [np.zeros((0, 5))] * n
         iter = tqdm(self.label_files, desc='Reading labels') if n > 1000 else self.label_files
         for i, file in enumerate(iter):
             try:
                 with open(file, 'r') as f:
-                    self.labels[i] = np.array([x.split() for x in f.read().splitlines()], dtype=np.float32)
+                    l = np.array([x.split() for x in f.read().splitlines()], dtype=np.float32)
+                    if l.shape[0]:
+                        assert l.shape[1] == 5, '> 5 label columns: %s' % file
+                        assert (l >= 0).all(), 'negative labels: %s' % file
+                        assert (l[:, 1:] <= 1).all(), 'non-normalized or out of bounds coordinate labels: %s' % file
+                        self.labels[i] = l
             except:
-                pass  # missing label file
+                print('Warning: missing labels for %s' % self.img_files[i])  # missing label file
+        assert len(np.concatenate(self.labels, 0)) > 0, 'No labels found. Incorrect label paths provided.'
 
     def __len__(self):
         return len(self.img_files)
+
+    # def __iter__(self):
+    #     self.count = -1
+    #     print('ran dataset iter')
+    #     #self.shuffled_vector = np.random.permutation(self.nF) if self.augment else np.arange(self.nF)
+    #     return self
 
     def __getitem__(self, index):
         if self.image_weights:
@@ -209,11 +224,12 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         label_path = self.label_files[index]
 
         # Load image
-        if hasattr(self, 'imgs'):  # preloaded
-            img = self.imgs[index]
-        else:
+        img = self.imgs[index]
+        if img is None:
             img = cv2.imread(img_path)  # BGR
-        assert img is not None, 'File Not Found ' + img_path
+            assert img is not None, 'File Not Found ' + img_path
+            if self.n < 1001:
+                self.imgs[index] = img  # cache image into memory
 
         # Augment colorspace
         augment_hsv = True
@@ -236,10 +252,11 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         # Letterbox
         h, w, _ = img.shape
         if self.rect:
-            new_shape = self.batch_shapes[self.batch[index]]
-            img, ratio, padw, padh = letterbox(img, new_shape=new_shape, mode='rect')
+            shape = self.batch_shapes[self.batch[index]]
+            img, ratio, padw, padh = letterbox(img, new_shape=shape, mode='rect')
         else:
-            img, ratio, padw, padh = letterbox(img, new_shape=self.img_size, mode='square')
+            shape = int(self.multi_scale[self.batch[index]]) if hasattr(self, 'multi_scale') else self.img_size
+            img, ratio, padw, padh = letterbox(img, new_shape=shape, mode='square')
 
         # Load labels
         labels = []
