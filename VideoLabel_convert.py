@@ -2,6 +2,7 @@ import os
 import shutil
 import argparse
 import random
+random.seed()
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--directory_path", type=str, help="directory containing images, labels, and classes.txt")
@@ -94,6 +95,8 @@ print("Copying images and labels...")
 train_image_list = []
 validation_image_list = []
 
+train_count = validation_count = test_count = 0
+
 def is_image(path):
     return  path.endswith(".png") or\
             path.endswith(".bmp") or\
@@ -116,14 +119,17 @@ for filename in os.listdir(directory):
         # add to test directory
         if chance <= opt.test_fraction:
             shutil.copy2(abs_filename, test_directory)
+            test_count += 1
 
         # add to images directory
         elif chance <= (opt.test_fraction + opt.validation_fraction):
-            validation_image_list.append("{}\n".format(os.path.join(test_directory, filename)))
+            validation_image_list.append("{}\n".format(os.path.join(image_directory, filename)))
             shutil.copy2(abs_filename, image_directory)
+            validation_count += 1
         else:
             train_image_list.append("{}\n".format(os.path.join(image_directory, filename)))
             shutil.copy2(abs_filename, image_directory)
+            train_count += 1
 
         label_file = abs_filename[:abs_filename.rfind('.')] + ".txt"
         if os.path.exists(label_file):
@@ -136,3 +142,9 @@ with open(os.path.join(out_directory, "valid_list.txt"), 'w+') as valid_list_fil
     valid_list_file.writelines(validation_image_list)
 
 print("Done!")
+
+total = train_count + validation_count + test_count
+print("Processed {} images.".format(total))
+print("Train:       {:05d} images | {:02.2f}%".format(train_count, (train_count / total) * 100))
+print("Validation:  {:05d} images | {:02.2f}%".format(validation_count, (validation_count / total) * 100))
+print("Test:        {:05d} images | {:02.2f}%".format(test_count, (test_count / total) * 100))
